@@ -1,0 +1,19 @@
+{
+    "debug": true,
+    "registry": {
+        "root_url": "https://registry.example.com",
+        "username": "my_username",
+        "password": "my_password",
+        "namespace": "my-user/my-repository"
+    },
+    "tests": [
+        {
+            "type": "put-blob-streaming",
+            "trials": 1,
+            "concurrency": 1,
+            "parameters": {
+                "size_bytes": 1073741824
+            }
+        }
+    ]
+}
