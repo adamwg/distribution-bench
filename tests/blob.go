@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/adamwg/distribution-bench/config"
 	"github.com/bloodorangeio/reggie"
@@ -40,9 +41,13 @@ func (pbt *putBlobStreamingTest) Run(client *reggie.Client) (uint64, error) {
 
 	uploadPath := resp.GetRelativeLocation()
 
-	body := digestingRandomReader(pbt.SizeBytes)
+	delay, err := time.ParseDuration(pbt.Delay)
+	if err != nil && pbt.Delay != "" {
+		return 0, err
+	}
+	body := digestingRandomReaderWithDelay(pbt.SizeBytes, 0)
 	resetBody := func(r *reggie.Request) error {
-		body = digestingRandomReader(pbt.SizeBytes)
+		body = digestingRandomReaderWithDelay(pbt.SizeBytes, delay)
 		r.SetBody(body)
 		return nil
 	}
@@ -116,6 +121,8 @@ func (pbt *putBlobMonolithicTest) Cleanup(client *reggie.Client) error {
 type PutBlobTestParameters struct {
 	// SizeBytes is the total size of the blob upload, in bytes.
 	SizeBytes uint64 `json:"size_bytes"`
+	// Delay is the time to delay between sending megabytes of data.
+	Delay string `json:"delay"`
 }
 
 func createPutBlobMonolithicTest(cfg config.TestConfig) (Runner, error) {
@@ -149,18 +156,47 @@ func createPutBlobStreamingTest(cfg config.TestConfig) (Runner, error) {
 	}, nil
 }
 
-type digestingReader struct {
+type digestingReader interface {
 	io.Reader
 	digest.Digester
 }
 
-func digestingRandomReader(length uint64) *digestingReader {
+type digestingReaderWithoutDelay struct {
+	io.Reader
+	digest.Digester
+}
+
+func digestingRandomReaderWithDelay(length uint64, delay time.Duration) digestingReader {
 	underlying := randomReader(int64(length))
 	digester := digest.Canonical.Digester()
 	tee := io.TeeReader(underlying, digester.Hash())
 
-	return &digestingReader{
-		Reader:   tee,
-		Digester: digester,
+	if delay == 0 {
+		return &digestingReaderWithoutDelay{
+			Reader:   tee,
+			Digester: digester,
+		}
 	}
+
+	return &digestingReaderWithDelay{
+		wrap:     tee,
+		Digester: digester,
+		delay:    delay,
+	}
+}
+
+type digestingReaderWithDelay struct {
+	wrap io.Reader
+	digest.Digester
+	delay time.Duration
+	used  bool
+}
+
+func (d *digestingReaderWithDelay) Read(buf []byte) (int, error) {
+	// First read: return immediately, after that sleep.
+	if d.used {
+		time.Sleep(d.delay)
+	}
+	d.used = true
+	return d.wrap.Read(buf)
 }
